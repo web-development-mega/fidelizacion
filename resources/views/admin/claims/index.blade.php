@@ -47,23 +47,30 @@
               </tr>
             </thead>
             <tbody>
-              @foreach($claims as $c)
-                <tr class="border-b">
-                  <td class="p-2">{{ $c->id }}</td>
-                  <td class="p-2 font-mono">{{ $c->code }}</td>
-                  <td class="p-2">{{ \App\Models\Claim::BENEFITS[$c->benefit] }}</td>
-                  <td class="p-2">{{ $c->tentative_date->format('Y-m-d') }}</td>
-                  <td class="p-2">{{ $c->name }}</td>
-                  <td class="p-2">{{ $c->phone }}</td>
-                  <td class="p-2">{{ $c->email }}</td>
-                  <td class="p-2">{{ $c->referrals_count }}</td>
-                  <td class="p-2">{{ $c->status }}</td>
-                  <td class="p-2">{{ $c->created_at->format('Y-m-d H:i') }}</td>
-                  <td class="p-2">
-                    <a class="text-blue-600 underline" href="{{ route('voucher.show',$c->code) }}" target="_blank">ver</a>
+            @foreach($claims as $c)
+              <tr class="border-b align-top">
+                <td class="p-2">{{ $c->id }}</td>
+                <td class="p-2 font-mono">{{ $c->code }}</td>
+                <td class="p-2">{{ \App\Models\Claim::BENEFITS[$c->benefit] }}</td>
+                <td class="p-2">{{ $c->tentative_date->format('Y-m-d') }}</td>
+                <td class="p-2">{{ $c->name }}</td>
+                <td class="p-2">{{ $c->phone }}</td>
+                <td class="p-2">{{ $c->email }}</td>
+                <td class="p-2">{{ $c->referrals_count }}</td>
+                <td class="p-2">{{ $c->status }}</td>
+                <td class="p-2">{{ $c->created_at->format('Y-m-d H:i') }}</td>
+                <td class="p-2"><a class="text-blue-600 underline" href="{{ route('voucher.show',$c->code) }}" target="_blank">ver</a></td>
+              </tr>
+              @if($c->referrals_count)
+                <tr class="border-b bg-slate-50/50">
+                  <td class="p-2 text-slate-500 text-xs" colspan="11">
+                    @foreach($c->referrals as $r)
+                      <div>• {{ $r->name ?? '(sin nombre)' }} — {{ $r->phone }} — {{ $r->email }}</div>
+                    @endforeach
                   </td>
                 </tr>
-              @endforeach
+              @endif
+            @endforeach
             </tbody>
           </table>
         </div>

@@ -12,12 +12,19 @@ class ClaimAdminController extends Controller
 {
     public function index(Request $request)
     {
-        $q = Claim::withCount('referrals')->latest();
+        $q = Claim::with(['referrals'])->withCount('referrals')->latest();
         if ($request->filled('benefit')) $q->where('benefit',$request->benefit);
         if ($request->filled('status'))  $q->where('status',$request->status);
         $claims = $q->paginate(20)->withQueryString();
         return view('admin.claims.index', compact('claims'));
     }
+
+    public function show(string $code)
+    {
+        $claim = \App\Models\Claim::with('referrals')->where('code', $code)->firstOrFail();
+        return view('admin.claims.show', compact('claim'));
+    }
+
 
     public function export(Request $request)
     {
