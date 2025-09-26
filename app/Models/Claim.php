@@ -17,10 +17,12 @@ class Claim extends Model
     ];
 
     public const BENEFITS = [
-        'mega_combo'           => '70% Mega Combo',
-        'revision_bateria'     => 'Revisión GRATIS de batería',
-        'cambio_aceite'        => '10% cambio de aceite',
-        'trabajos_autorizados' => '10% Trabajos autorizados',
+        'cambio_aceite'         => '10% cambio de aceite',
+        'trabajos_autorizados'  => '10% trabajos autorizados',
+        'mega_combo'            => '70% en alineación y balanceo',
+        // alias por compatibilidad si aún tienes registros antiguos:
+        'mantenimiento_preventivo' => '70% en alineación y balanceo',
+        'revision_bateria'      => 'Revisión GRATIS de batería',
     ];
 
     public function referrals(): HasMany

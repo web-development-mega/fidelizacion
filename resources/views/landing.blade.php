@@ -31,15 +31,42 @@
   .tile.dark .ico{ filter:invert(1) brightness(1.05) }
   .tile .h{ font-weight:800; line-height:1.08; font-size:15px; margin:0 }
   .promo-legal{ height:20px; line-height:20px; color:#fff; text-align:center; font-size:11px; opacity:.95; margin-top:8px }
+
+  /* -------- Footer (logo debajo del texto) -------- */
   .promo-footer{ background:#fff; padding:18px 20px }
-  .footer-inner{ max-width:820px; margin:0 auto; display:grid; grid-template-columns:auto 1fr; gap:16px; align-items:center }
-  .renting-logo{ width:160px; height:44px; border-radius:10px; background:#ecfdf5;
-    outline:1px solid var(--ring); display:grid; place-items:center; color:#059669; font-weight:700; font-size:14px }
+  .footer-inner{
+    max-width:820px; margin:0 auto;
+    display:grid; grid-template-columns:1fr;
+    gap:12px; justify-items:center; text-align:center;
+  }
+  .renting-logo{
+    width:160px; height:44px; border-radius:10px; background:#ecfdf5;
+    outline:1px solid var(--ring); display:grid; place-items:center;
+    color:#059669; font-weight:700; font-size:14px
+  }
+
+  /* ======= centrado perfecto en móvil ======= */
   @media (max-width:1024px){ :root{ --size:540px } }
   @media (max-width:640px){
     :root{ --size:420px } .promo-grid{ aspect-ratio:auto }
-    .footer-inner{ grid-template-columns:1fr; text-align:center } .renting-logo{ justify-self:center }
   }
+  @media (max-width: 640px){
+    .vp-center{
+      min-height: 100dvh;
+      min-height: calc(100dvh - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+      display:flex; align-items:center; justify-content:center; padding:16px;
+    }
+    .promo-wrap{ margin-inline:auto; width:min(96vw, var(--size)); }
+  }
+  @supports (height: 100svh){
+    @media (max-width: 640px){
+      .vp-center{
+        min-height: 100svh;
+        min-height: calc(100svh - env(safe-area-inset-top) - env(safe-area-inset-bottom));
+      }
+    }
+  }
+  /* ⛔️ Importante: sin max-height en .promo-wrap para no cortar el footer */
 </style>
 
 <div class="vp-center">
@@ -67,11 +94,15 @@
           </div>
         </button>
         {{-- 3 --}}
-        <button type="button" class="tile dark js-open-claim" data-benefit="mega_combo" data-label="70% mantenimiento preventivo">
+        <button type="button" class="tile dark js-open-claim"
+                data-benefit="mega_combo"
+                data-label="70% en alineación y balanceo">
           <div>
             <img class="ico" src="{{ asset('img/icons/maintenance.svg') }}"
-              onerror="this.onerror=null;this.src='data:image/svg+xml;utf8,<?xml version=&quot;1.0&quot;?><svg xmlns=&quot;http://www.w3.org/2000/svg&quot; width=&quot;36&quot; height=&quot;36&quot;><rect width=&quot;36&quot; height=&quot;36&quot; rx=&quot;8&quot; fill=&quot;%23e5e7eb&quot;/><text x=&quot;50%&quot; y=&quot;54%&quot; text-anchor=&quot;middle&quot; font-size=&quot;9&quot; fill=&quot;%23666&quot; font-family=&quot;Arial,Helvetica&quot;>ICONO</text></svg>';">
-            <p class="h">70% <strong>mantenimiento</strong></p><p class="h">preventivo</p>
+                onerror="this.onerror=null;this.src='data:image/svg+xml;utf8,<?xml version=&quot;1.0&quot;?><svg xmlns=&quot;http://www.w3.org/2000/svg&quot; width=&quot;36&quot; height=&quot;36&quot;><rect width=&quot;36&quot; height=&quot;36&quot; rx=&quot;8&quot; fill=&quot;%23e5e7eb&quot;/><text x=&quot;50%&quot; y=&quot;54%&quot; text-anchor=&quot;middle&quot; font-size=&quot;9&quot; fill=&quot;%23666&quot; font-family=&quot;Arial,Helvetica&quot;>ICONO</text></svg>';">
+
+            <p class="h">70% en</p>
+            <p class="h"><strong>alineación y balanceo</strong></p>
           </div>
         </button>
         {{-- 4 --}}
@@ -88,12 +119,13 @@
 
     <footer class="promo-footer">
       <div class="footer-inner">
+        <div class="text-[15px] font-semibold leading-tight text-zinc-900">
+          Somos el taller autorizado de
+        </div>
         <div class="renting-logo">Logo Renting</div>
-        <div>
-          <div class="text-[15px] font-semibold leading-tight text-zinc-900">Somos el taller autorizado de</div>
-          <div class="text-lg sm:text-xl font-bold leading-tight">
-            <span class="text-emerald-600">Selecciona</span> para reclamar <span class="text-emerald-700">tu beneficio</span>
-          </div>
+        <div class="text-lg sm:text-xl font-bold leading-tight">
+          <span class="text-emerald-600">Selecciona</span> para reclamar
+          <span class="text-emerald-700">tu beneficio</span>
         </div>
       </div>
     </footer>
@@ -108,7 +140,6 @@
   <input type="hidden" name="name" id="f_name">
   <input type="hidden" name="phone" id="f_phone">
   <input type="hidden" name="email" id="f_email">
-
   {{-- Referidos (3) --}}
   @for ($i=1; $i<=3; $i++)
     <input type="hidden" name="referrals[{{ $i }}][name]"  id="f_r{{$i}}_name">
@@ -120,8 +151,6 @@
 @push('scripts')
 <script>
 (function () {
-  const csrf = document.querySelector('meta[name="csrf-token"]').getAttribute('content');
-
   function modalHTML(benefitLabel){
     return `
       <div>
@@ -194,11 +223,7 @@
       confirmButtonText: 'Enviar solicitud',
       cancelButtonText: 'Cancelar',
       focusConfirm: false,
-      willOpen: () => {
-        // Prefill si quieres (ej. de sessionStorage)
-      },
       preConfirm: () => {
-        // Pequeña validación liviana
         const dt = document.getElementById('m_date').value;
         if (!dt){
           Swal.showValidationMessage('Indica una <b>fecha tentativa</b>.');
@@ -223,13 +248,10 @@
           r3_email: document.getElementById('m_r3_email').value.trim(),
         };
       },
-      customClass:{
-        popup: 'px-2'
-      }
+      customClass:{ popup: 'px-2' }
     }).then((res) => {
       if(!res.isConfirmed) return;
 
-      // Trasladar al form oculto y enviar (mantiene redirecciones de Laravel)
       const f = document.getElementById('claim-hidden-form');
 
       document.getElementById('f_benefit').value = benefit;
@@ -238,7 +260,6 @@
       document.getElementById('f_phone').value   = res.value.phone;
       document.getElementById('f_email').value   = res.value.email;
 
-      // Referidos
       document.getElementById('f_r1_name').value  = res.value.r1_name;
       document.getElementById('f_r1_phone').value = res.value.r1_phone;
       document.getElementById('f_r1_email').value = res.value.r1_email;
@@ -260,6 +281,65 @@
       e.preventDefault();
       openClaimModal(btn.dataset.benefit, btn.dataset.label);
     });
+  });
+})();
+</script>
+@endpush
+
+{{-- Ajuste de encaje en desktop: reduce solo el grid cuadrado para que TODO (footer incluido) quepa --}}
+@push('scripts')
+<script>
+(function(){
+  function fitGridToViewport(){
+    const wrap = document.querySelector('.promo-wrap');
+    const grid = wrap?.querySelector('.promo-grid');
+    if(!wrap || !grid) return;
+
+    // Reset para medir tamaño natural
+    grid.style.width  = '';
+    grid.style.height = '';
+
+    // Solo en desktop; en móvil ya está controlado
+    if (window.innerWidth < 1024) return;
+
+    const vh = window.innerHeight;
+
+    // Medimos el alto natural del wrapper y del grid
+    const naturalWrapH = wrap.offsetHeight;
+    const gridH        = grid.offsetHeight;
+
+    // Si ya cabe, no tocamos nada
+    if (naturalWrapH <= vh) return;
+
+    // Todo lo que no es grid (header, paddings, legal, footer…)
+    const extra = naturalWrapH - gridH;
+
+    // Tamaño objetivo del cuadrado para que el wrapper quepa en el viewport
+    let size = Math.min(grid.offsetWidth, vh - extra - 12); // 12px de respiro
+    size = Math.max(320, size); // límite inferior para no quedar minúsculo
+    size = Math.min(size, wrap.clientWidth); // no más ancho que el contenedor
+
+    grid.style.width  = size + 'px';
+    grid.style.height = size + 'px';
+
+    // Ajuste fino por redondeos: si aún se pasa, reduce un poco más
+    const afterH = wrap.offsetHeight;
+    if (afterH > vh){
+      const delta    = afterH - vh;
+      const adjusted = Math.max(300, size - delta - 8);
+      grid.style.width  = adjusted + 'px';
+      grid.style.height = adjusted + 'px';
+    }
+  }
+
+  // Ejecutar en carga, resize y tras un pequeño delay por fuentes/reflows
+  window.addEventListener('load', () => {
+    fitGridToViewport();
+    setTimeout(fitGridToViewport, 60);
+  });
+  window.addEventListener('resize', () => {
+    clearTimeout(window.__fitGridT);
+    window.__fitGridT = setTimeout(fitGridToViewport, 80);
   });
 })();
 </script>

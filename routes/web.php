@@ -54,3 +54,13 @@ Route::middleware('auth')->group(function () {
 });
 
 require __DIR__ . '/auth.php';
+
+
+use Illuminate\Support\Facades\Log;
+
+if (app()->environment('local')) {
+    Route::get('/__logtest', function () {
+        Log::debug('Log test @ '.now());
+        return 'ok';
+    });
+}
