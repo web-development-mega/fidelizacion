@@ -6,6 +6,8 @@ use App\Http\Requests\StoreClaimRequest;
 use App\Models\Claim;
 use Illuminate\Support\Str;
 use Illuminate\Support\Facades\Storage;
+use Illuminate\Database\QueryException;
+use Illuminate\Http\JsonResponse;
 use Intervention\Image\ImageManager;
 use Intervention\Image\Drivers\Gd\Driver;
 use BaconQrCode\Writer;
@@ -30,59 +32,101 @@ class ClaimController extends Controller
         ]);
     }
 
-    /** Procesa el formulario, genera QR + bono y guarda registro. */
+    /**
+     * Procesa el formulario, genera QR + bono y guarda registro.
+     * Soporta flujo normal (redirect) y flujo AJAX (JSON) para modal SweetAlert2.
+     */
     public function store(StoreClaimRequest $request)
     {
-        $benefit = $request->input('benefit');
-        $code    = strtoupper(Str::random(8));
+        try {
+            $benefit = $request->input('benefit');
+            $code    = strtoupper(Str::random(8));
 
-        // 1) QR (PNG) con BaconQrCode (GD)
-        $voucherUrl = route('voucher.show', $code);
-        $renderer   = new GDLibRenderer(440);
-        $writer     = new Writer($renderer);
-        $qrPng      = $writer->writeString($voucherUrl);
+            // 1) QR (PNG) con BaconQrCode (GD)
+            $voucherUrl = route('voucher.show', $code);
+            $renderer   = new GDLibRenderer(440);
+            $writer     = new Writer($renderer);
+            $qrPng      = $writer->writeString($voucherUrl);
 
-        $qrPath = "vouchers/qr_{$code}.png";
-        Storage::disk('public')->put($qrPath, $qrPng);
+            $qrPath = "vouchers/qr_{$code}.png";
+            Storage::disk('public')->put($qrPath, $qrPng);
 
-        // 2) Componer el bono PNG (ticket)
-        $voucherPath = "vouchers/bono_{$code}.png";
-        $this->makeVoucherPng(
-            storage_path("app/public/{$qrPath}"),
-            public_path('logo.png'), // opcional
-            Claim::BENEFITS[$benefit],
-            $code,
-            $request->date('tentative_date')->format('Y-m-d'),
-            storage_path("app/public/{$voucherPath}"),
-            (string) $request->string('name')
-        );
+            // 2) Componer el bono PNG (ticket)
+            $voucherPath = "vouchers/bono_{$code}.png";
+            $this->makeVoucherPng(
+                storage_path("app/public/{$qrPath}"),
+                public_path('logo.png'), // opcional
+                Claim::BENEFITS[$benefit],
+                $code,
+                $request->date('tentative_date')->format('Y-m-d'),
+                storage_path("app/public/{$voucherPath}"),
+                (string) $request->string('name')
+            );
 
-        // 3) Guardar claim
-        $claim = Claim::create([
-            'benefit'        => $benefit,
-            'tentative_date' => $request->date('tentative_date'),
-            'name'           => $request->string('name'),
-            'phone'          => $request->string('phone'),
-            'email'          => $request->string('email'),
-            'code'           => $code,
-            'qr_path'        => $qrPath,
-            'voucher_path'   => $voucherPath,
-            'meta'           => ['ip' => $request->ip(), 'ua' => $request->userAgent()],
-        ]);
-
-        // 4) Referidos (opcionales, hasta 3)
-        $referrals = collect($request->input('referrals', []))->take(3)->values();
-        foreach ($referrals as $i => $ref) {
-            if (empty($ref['name']) && empty($ref['phone']) && empty($ref['email'])) continue;
-            $claim->referrals()->create([
-                'name'     => $ref['name']  ?? null,
-                'phone'    => $ref['phone'] ?? null,
-                'email'    => $ref['email'] ?? null,
-                'position' => $i + 1,
+            // 3) Guardar claim
+            $claim = Claim::create([
+                'benefit'        => $benefit,
+                'tentative_date' => $request->date('tentative_date'),
+                'name'           => $request->string('name'),
+                'phone'          => $request->string('phone'),
+                'email'          => $request->string('email'),
+                'code'           => $code,
+                'qr_path'        => $qrPath,
+                'voucher_path'   => $voucherPath,
+                'meta'           => ['ip' => $request->ip(), 'ua' => $request->userAgent()],
             ]);
-        }
 
-        return redirect()->route('voucher.show', $claim->code);
+            // 4) Referidos (opcionales, hasta 3)
+            $referrals = collect($request->input('referrals', []))->take(3)->values();
+            foreach ($referrals as $i => $ref) {
+                if (empty($ref['name']) && empty($ref['phone']) && empty($ref['email'])) continue;
+                $claim->referrals()->create([
+                    'name'     => $ref['name']  ?? null,
+                    'phone'    => $ref['phone'] ?? null,
+                    'email'    => $ref['email'] ?? null,
+                    'position' => $i + 1,
+                ]);
+            }
+
+            // 5) Respuesta según tipo: JSON (modal) o redirect (flujo normal)
+            if ($request->expectsJson()) {
+                return response()->json([
+                    'redirect' => route('voucher.show', $claim->code),
+                ], 201);
+            }
+
+            return redirect()->route('voucher.show', $claim->code);
+
+        } catch (QueryException $e) {
+            // 23000 = violación de restricción (UNIQUE), p.ej. email duplicado en BD
+            $isUniqueViolation = (string)($e->errorInfo[0] ?? '') === '23000';
+
+            if ($request->expectsJson()) {
+                return new JsonResponse([
+                    'message' => 'Validación falló.',
+                    'errors'  => [
+                        'email' => [$isUniqueViolation
+                            ? 'Este correo ya tiene un bono registrado.'
+                            : 'Ocurrió un error inesperado. Intenta de nuevo.']
+                    ],
+                ], 422);
+            }
+
+            if ($isUniqueViolation) {
+                return back()->withInput()
+                    ->withErrors(['email' => 'Este correo ya tiene un bono registrado.']);
+            }
+
+            throw $e; // otros errores de BD: deja que Laravel los maneje
+        } catch (\Throwable $e) {
+            // Fallback general para el flujo AJAX (evita cerrar el modal sin feedback)
+            if ($request->expectsJson()) {
+                return new JsonResponse([
+                    'message' => 'Ocurrió un error inesperado. Intenta de nuevo.',
+                ], 500);
+            }
+            throw $e;
+        }
     }
 
     /** Vista del bono generado. */

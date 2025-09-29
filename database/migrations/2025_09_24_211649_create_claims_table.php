@@ -13,7 +13,7 @@ return new class extends Migration {
             $table->date('tentative_date');
             $table->string('name')->nullable();
             $table->string('phone')->nullable();
-            $table->string('email')->nullable();
+            $table->string('email')->nullable()->unique();
             $table->string('code')->unique();     // código del bono
             $table->string('qr_path');            // storage/app/public/...
             $table->string('voucher_path');       // storage/app/public/...
