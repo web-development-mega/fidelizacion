@@ -21,10 +21,12 @@ class ClaimController extends Controller
         return view('landing', ['benefits' => Claim::BENEFITS]);
     }
 
-    /** Formulario para solicitar un bono según beneficio. */
-    public function form(string $benefit)
+    /** Formulario para solicitar un bono según beneficio (acepta beneficio opcional). */
+    public function form(?string $benefit = null)
     {
-        abort_unless(array_key_exists($benefit, Claim::BENEFITS), 404);
+        if (!$benefit || !array_key_exists($benefit, Claim::BENEFITS)) {
+            return redirect()->route('landing');
+        }
 
         return view('claim.form', [
             'benefitKey'   => $benefit,
@@ -34,15 +36,24 @@ class ClaimController extends Controller
 
     /**
      * Procesa el formulario, genera QR + bono y guarda registro.
-     * Soporta flujo normal (redirect) y flujo AJAX (JSON) para modal SweetAlert2.
+     * Soporta flujo normal (redirect) y flujo AJAX (JSON) para modal.
      */
     public function store(StoreClaimRequest $request)
     {
         try {
-            $benefit = $request->input('benefit');
-            $code    = strtoupper(Str::random(8));
+            // 0) Campos validados (incluye los nuevos)
+            $v = $request->validated();
 
-            // 1) QR (PNG) con BaconQrCode (GD)
+            // Benefit (oculto en el form). Fallback si no llega.
+            $benefit = (string)($v['benefit'] ?? '');
+            if (!$benefit || !array_key_exists($benefit, Claim::BENEFITS)) {
+                $benefit = array_key_first(Claim::BENEFITS);
+            }
+
+            // Código único del voucher
+            $code = strtoupper(Str::random(8));
+
+            // 1) Generar QR (PNG)
             $voucherUrl = route('voucher.show', $code);
             $renderer   = new GDLibRenderer(440);
             $writer     = new Writer($renderer);
@@ -51,32 +62,50 @@ class ClaimController extends Controller
             $qrPath = "vouchers/qr_{$code}.png";
             Storage::disk('public')->put($qrPath, $qrPng);
 
-            // 2) Componer el bono PNG (ticket)
+            // 2) Componer el bono PNG (ticket) con fecha + hora
+            $fecha = $request->date('fecha_tentativa'); // Carbon|null
+            $hora  = $request->string('hora_tentativa')->toString();
+            $fechaTexto = $fecha ? $fecha->format('Y-m-d') : '';
+            $fechaHora  = trim($fechaTexto . ($hora ? " {$hora}" : ''));
+
             $voucherPath = "vouchers/bono_{$code}.png";
             $this->makeVoucherPng(
                 storage_path("app/public/{$qrPath}"),
-                public_path('logo.png'), // opcional
-                Claim::BENEFITS[$benefit],
+                public_path('logo.png'), // opcional si existe
+                Claim::BENEFITS[$benefit] ?? ucfirst($benefit),
                 $code,
-                $request->date('tentative_date')->format('Y-m-d'),
+                $fechaHora, // mostramos fecha y hora en la tarjeta
                 storage_path("app/public/{$voucherPath}"),
-                (string) $request->string('name')
+                (string) $request->string('nombre')
             );
 
-            // 3) Guardar claim
+            // 3) Guardar claim con NUEVOS campos + LEGACY para compatibilidad
             $claim = Claim::create([
-                'benefit'        => $benefit,
-                'tentative_date' => $request->date('tentative_date'),
-                'name'           => $request->string('name'),
-                'phone'          => $request->string('phone'),
-                'email'          => $request->string('email'),
-                'code'           => $code,
-                'qr_path'        => $qrPath,
-                'voucher_path'   => $voucherPath,
-                'meta'           => ['ip' => $request->ip(), 'ua' => $request->userAgent()],
+                'benefit'         => $benefit,
+                'code'            => $code,
+                'qr_path'         => $qrPath,
+                'voucher_path'    => $voucherPath,
+                'meta'            => ['ip' => $request->ip(), 'ua' => $request->userAgent()],
+
+                // === NUEVOS campos ===
+                'nombre'          => (string) $request->string('nombre'),
+                'cedula'          => (string) $request->string('cedula'),
+                'telefono'        => (string) $request->string('telefono'),
+                'direccion'       => (string) $request->string('direccion'),
+                'email'           => (string) $request->string('email'),
+                'placa'           => (string) $request->string('placa'),
+                'marca_modelo'    => (string) $request->string('marca_modelo'),
+                'fecha_tentativa' => $fecha,
+                'hora_tentativa'  => (string) $request->string('hora_tentativa'),
+
+                // === LEGACY (para satisfacer NOT NULL y compat con vistas antiguas) ===
+                'tentative_date'  => $fecha,                                        // era NOT NULL en tu schema
+                'name'            => (string) $request->string('nombre'),           // alias
+                'phone'           => (string) $request->string('telefono'),         // alias
+                // 'status' tiene default 'issued', no es necesario setearlo
             ]);
 
-            // 4) Referidos (opcionales, hasta 3)
+            // 4) Referidos (opcionales)
             $referrals = collect($request->input('referrals', []))->take(3)->values();
             foreach ($referrals as $i => $ref) {
                 if (empty($ref['name']) && empty($ref['phone']) && empty($ref['email'])) continue;
@@ -98,28 +127,49 @@ class ClaimController extends Controller
             return redirect()->route('voucher.show', $claim->code);
 
         } catch (QueryException $e) {
-            // 23000 = violación de restricción (UNIQUE), p.ej. email duplicado en BD
-            $isUniqueViolation = (string)($e->errorInfo[0] ?? '') === '23000';
+            // Diferenciar UNIQUE vs NOT NULL (ambos usan SQLSTATE 23000 en SQLite)
+            $msg = strtolower((string)($e->errorInfo[2] ?? $e->getMessage()));
+            $isUnique  = str_contains($msg, 'unique');     // 'unique constraint failed'
+            $isNotNull = str_contains($msg, 'not null');   // 'not null constraint failed'
 
-            if ($request->expectsJson()) {
-                return new JsonResponse([
-                    'message' => 'Validación falló.',
-                    'errors'  => [
-                        'email' => [$isUniqueViolation
-                            ? 'Este correo ya tiene un bono registrado.'
-                            : 'Ocurrió un error inesperado. Intenta de nuevo.']
-                    ],
-                ], 422);
+            if ($isUnique) {
+                $map = [
+                    'email'    => 'Este correo ya tiene un bono registrado.',
+                    'cedula'   => 'Esta cédula ya tiene un bono registrado.',
+                    'telefono' => 'Este teléfono ya tiene un bono registrado.',
+                    'nombre'   => 'Este nombre ya tiene un bono registrado.',
+                ];
+                $field = null;
+                foreach (array_keys($map) as $k) {
+                    // el mensaje típico incluye 'claims.k' (p. ej., claims.email)
+                    if (str_contains($msg, ".{$k}")) { $field = $k; break; }
+                }
+                $payload = $field ? [ $field => [ $map[$field] ] ] : [ 'form' => ['Datos duplicados.'] ];
+
+                return $request->expectsJson()
+                    ? new JsonResponse(['message' => 'Validación falló.', 'errors' => $payload], 422)
+                    : back()->withInput()->withErrors($payload);
             }
 
-            if ($isUniqueViolation) {
-                return back()->withInput()
-                    ->withErrors(['email' => 'Este correo ya tiene un bono registrado.']);
+            if ($isNotNull) {
+                // intenta extraer la columna: '... failed: claims.tentative_date'
+                $field = null;
+                if (preg_match('/failed:\s*claims\.(\w+)/', $msg, $m)) $field = $m[1];
+
+                $payload = $field
+                    ? [ $field => ['Este campo es obligatorio.'] ]
+                    : [ 'form' => ['Faltan datos requeridos.'] ];
+
+                return $request->expectsJson()
+                    ? new JsonResponse(['message' => 'Validación falló.', 'errors' => $payload], 422)
+                    : back()->withInput()->withErrors($payload);
             }
 
-            throw $e; // otros errores de BD: deja que Laravel los maneje
+            // Otros errores de BD
+            throw $e;
+
         } catch (\Throwable $e) {
-            // Fallback general para el flujo AJAX (evita cerrar el modal sin feedback)
+            // Fallback general para el flujo AJAX
             if ($request->expectsJson()) {
                 return new JsonResponse([
                     'message' => 'Ocurrió un error inesperado. Intenta de nuevo.',
@@ -150,14 +200,14 @@ class ClaimController extends Controller
 
     /**
      * Ticket PNG (horizontal): esquinas redondeadas, perforación central, QR centrado.
-     * Título con auto-ajuste (wrap/scale). Render HiDPI 2× y reescala a 1400×800.
+     * Render HiDPI 2× y reescala a 1400×800.
      */
     protected function makeVoucherPng(
         string $qrAbsPath,
         ?string $logoAbsPath,
         string $benefitLabel,
         string $code,
-        string $date,
+        string $date,            // puede traer "YYYY-MM-DD HH:mm"
         string $saveTo,
         ?string $customerName = null
     ) {
@@ -206,24 +256,24 @@ class ClaimController extends Controller
         // Columna izquierda
         $lx = $tx + 56*$S;
         $leftTop = $ty + 150*$S;
-        $leftBottomGuard = $ty + $th - 160*$S; // margen inferior seguro
+        $leftBottomGuard = $ty + $th - 160*$S;
         $ly = $leftTop;
         $maxW = ($midX - $lx - 60*$S);
 
-        // Título con auto-ajuste
+        // Título ajustado
         $fit = $this->drawHeadingWrapped($img, $benefitLabel, $lx, $ly, $maxW, 76*$S, 56*$S, 'bold', 1.14);
         $ly += $fit['height'] + 40*$S;
 
-        // Fila 2 columnas: Cliente / Fecha tentativa
+        // Fila 2 columnas: Cliente / Fecha y hora
         $colGap = 36*$S; $colW = intval(($maxW - $colGap)/2);
         $this->drawLabelValue($img, 'Cliente', $customerName ?: '—', $lx, $ly, $colW, 24*$S, 44*$S);
         $this->drawLabelValue($img, 'Fecha tentativa', $date ?: '—', $lx + $colW + $colGap, $ly, $colW, 24*$S, 40*$S);
         $ly += 44*$S + 48*$S;
 
-        // Código (badge) con separación real respecto al label y margen inferior
+        // Código (badge)
         $labelSize = 24*$S;
-        $this->drawText($img, 'Código', $lx, $ly, ['size'=>$labelSize, 'color'=>$muted]);
-        $badgeTop = $ly + intval($labelSize * 1.6); // renglón siguiente
+        $this->drawText($img, 'Código', $lx, $ly, ['size'=>$labelSize, 'color'=>'#6b7280']);
+        $badgeTop = $ly + intval($labelSize * 1.6);
 
         $badgeW = min(620*$S, $maxW);
         $badgeH = 110*$S;
@@ -239,20 +289,20 @@ class ClaimController extends Controller
             'size'=>48*$S, 'color'=>$brand, 'weight'=>'extrabold'
         ]);
 
-        // ===== Columna derecha (QR más pequeño y centrado) =====
-        $rcPad = 56*$S;                          // padding interno en la derecha
+        // Columna derecha (QR)
+        $rcPad = 56*$S;
         $rcX0  = $midX + $rcPad;
         $rcX1  = $tx + $tw - $rcPad;
-        $rcY0  = $ty + 120*$S;                   // margen superior
-        $rcY1  = $ty + $th - 180*$S;             // margen inferior
+        $rcY0  = $ty + 120*$S;
+        $rcY1  = $ty + $th - 180*$S;
         $rcW   = $rcX1 - $rcX0;
         $rcH   = $rcY1 - $rcY0;
 
-        $panelSize = min(520*$S, min($rcW, $rcH)); // más pequeño que antes
+        $panelSize = min(520*$S, min($rcW, $rcH));
         $panel     = $manager->create($panelSize, $panelSize)->fill($soft);
 
         $qr       = $manager->read($qrAbsPath);
-        $qrSize   = (int)($panelSize * 0.82);      // reduce/ajusta el QR
+        $qrSize   = (int)($panelSize * 0.82);
         $qr->resize($qrSize, $qrSize, function ($c) { $c->aspectRatio(); $c->upsize(); });
         $panel->place($qr, 'center');
 
@@ -265,11 +315,11 @@ class ClaimController extends Controller
             'Escanea para validar',
             $panelX + $panelSize/2,
             $panelY + $panelSize + 36*$S,
-            ['size'=>22*$S, 'color'=>$muted, 'align'=>'center']
+            ['size'=>22*$S, 'color'=>'#475569', 'align'=>'center']
         );
 
         // Acento inferior
-        $img->place($manager->create($tw,12*$S)->fill($brand),'top-left',$tx,$ty+$th-12*$S);
+        $img->place($manager->create($tw,12*$S)->fill('#10b981'),'top-left',$tx,$ty+$th-12*$S);
 
         // Escala final
         $img->resize($FW,$FH);
@@ -280,7 +330,6 @@ class ClaimController extends Controller
        Helpers de tipografía / layout
        ========================= */
 
-    /** Dibuja un par Etiqueta/Valor dentro de un ancho. */
     protected function drawLabelValue($image, string $label, string $value, int $x, int $y, int $w, int $labelSize, int $valueSize): void
     {
         $this->drawText($image, $label, $x, $y, ['size'=>$labelSize, 'color'=>'#6b7280']);
@@ -289,14 +338,10 @@ class ClaimController extends Controller
         ]);
     }
 
-    /**
-     * Título ajustado al ancho. Devuelve ['size'=>int,'height'=>int].
-     */
     protected function drawHeadingWrapped($image, string $text, int $x, int $y, int $maxWidth, int $baseSize, int $minSize, string $weight='bold', float $lh=1.15): array
     {
         $font = $this->getFontFile($weight);
 
-        // ¿Cabe en una línea?
         if ($font) {
             $one = $this->measureTextWidth($text, $baseSize, $font);
             if ($one <= $maxWidth) {
@@ -305,7 +350,6 @@ class ClaimController extends Controller
             }
         }
 
-        // Wrap con reducción gradual
         $size = $baseSize; $lines = [];
         do {
             $lines = $this->wrapToWidth($text, $size, $weight, $maxWidth);
@@ -321,7 +365,6 @@ class ClaimController extends Controller
         return ['size'=>$size, 'height'=>$dy ?: intval($size*$lh)];
     }
 
-    /** Envuelve texto por palabras para no exceder $maxWidth. */
     protected function wrapToWidth(string $text, int $size, string $weight, int $maxWidth): array
     {
         $font = $this->getFontFile($weight);
@@ -344,7 +387,6 @@ class ClaimController extends Controller
         return $lines;
     }
 
-    /** Mide ancho de texto con GD (imagettfbbox). */
     protected function measureTextWidth(string $text, int $size, string $fontFile): int
     {
         $box = imagettfbbox($size, 0, $fontFile, $text);
@@ -352,7 +394,6 @@ class ClaimController extends Controller
         return (int)(max($box[2], $box[4]) - min($box[0], $box[6]));
     }
 
-    /** Devuelve ruta a una TTF según peso (Inter > Arial/DejaVu). */
     protected function getFontFile(string $weight = 'regular'): ?string
     {
         $candidates = [
@@ -382,10 +423,6 @@ class ClaimController extends Controller
         return null;
     }
 
-    /**
-     * Escribe texto asegurando TTF real (si no, GD usa fuente minúscula).
-     * options: size, color, align, valign, weight(regular|semibold|bold|extrabold)
-     */
     protected function drawText($image, string $text, int $x, int $y, array $opt = []): void
     {
         $size   = $opt['size']   ?? 28;

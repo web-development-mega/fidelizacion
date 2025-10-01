@@ -37,7 +37,7 @@ class ClaimAdminController extends Controller
 
     public function export(Request $request)
     {
-        // 1) Datos
+        // 1) Filtrado opcional
         $q = Claim::with('referrals')->latest();
         if ($request->filled('benefit')) $q->where('benefit', $request->benefit);
         if ($request->filled('status'))  $q->where('status',  $request->status);
@@ -48,11 +48,27 @@ class ClaimAdminController extends Controller
         $spreadsheet = new Spreadsheet();
         $sheet = $spreadsheet->getActiveSheet();
 
-        // Encabezados
+        // Encabezados (incluye campos nuevos)
         $headers = [
-            'ID','Beneficio','Fecha tentativa','Nombre','Teléfono','Email',
-            'Código','Estado','#Referidos','Referidos (detalle)','Creado'
+            'ID',
+            'Código',
+            'Beneficio (key)',
+            'Beneficio',
+            'Estado',
+            'Nombre',
+            'Cédula',
+            'Teléfono',
+            'Correo',
+            'Dirección',
+            'Placa',
+            'Marca/Modelo',
+            'Fecha tentativa',
+            'Hora tentativa',
+            'Creado en',
+            '#Referidos',
+            'Referidos (detalle)',
         ];
+
         foreach ($headers as $i => $h) {
             $col = Coordinate::stringFromColumnIndex($i + 1);
             $sheet->setCellValue($col.'1', $h);
@@ -61,6 +77,10 @@ class ClaimAdminController extends Controller
         // 3) Cuerpo
         $data = [];
         foreach ($rows as $c) {
+            $benefitKey   = $c->benefit;
+            $benefitLabel = Claim::BENEFITS[$benefitKey] ?? $benefitKey;
+
+
             $refDetail = $c->referrals->map(function ($r) {
                 $parts = array_filter([$r->name, $r->phone, $r->email]);
                 return implode(' / ', $parts);
@@ -68,21 +88,27 @@ class ClaimAdminController extends Controller
 
             $data[] = [
                 $c->id,
-                Claim::BENEFITS[$c->benefit] ?? $c->benefit,
-                optional($c->tentative_date)->format('Y-m-d'),
-                $c->name,
-                $c->phone,
-                $c->email,
                 $c->code,
+                $benefitKey,
+                $benefitLabel,
                 $c->status,
+                $c->nombre,
+                $c->cedula,
+                $c->telefono,
+                $c->email,
+                $c->direccion,
+                $c->placa,
+                $c->marca_modelo,
+                optional($c->fecha_tentativa)->format('Y-m-d'),
+                $c->hora_tentativa,
+                optional($c->created_at)->format('Y-m-d H:i'),
                 $c->referrals->count(),
                 $refDetail,
-                $c->created_at->format('Y-m-d H:i'),
             ];
         }
 
         if (!empty($data)) {
-            // Vuelca data empezando en A2
+            // Vuelca data a partir de A2
             $sheet->fromArray($data, null, 'A2', true);
         }
 
@@ -93,7 +119,7 @@ class ClaimAdminController extends Controller
         }
 
         // 4) Descargar
-        $filename = 'claims.xlsx';
+        $filename = 'claims_'.now()->format('Ymd_His').'.xlsx';
         $tmp = storage_path('app/exports/'.$filename);
         @mkdir(dirname($tmp), 0777, true);
         (new Xlsx($spreadsheet))->save($tmp);

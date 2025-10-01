@@ -4,6 +4,7 @@ use App\Http\Controllers\ClaimController;
 use App\Http\Controllers\Admin\ClaimAdminController;
 use App\Http\Controllers\ProfileController;
 use Illuminate\Support\Facades\Route;
+use Illuminate\Support\Facades\Log;
 
 /*
 |--------------------------------------------------------------------------
@@ -12,8 +13,14 @@ use Illuminate\Support\Facades\Route;
 */
 Route::controller(ClaimController::class)->group(function () {
     Route::get('/', 'landing')->name('landing');
-    Route::get('/claim/{benefit}', 'form')->name('claim.form');
-    Route::post('/claim', 'store')->name('claim.store');
+
+    // antes: /claim/{benefit}
+    Route::get('/claim/{benefit?}', 'form')->name('claim.form');
+
+    // agrega throttling básico para el POST
+    Route::post('/claim', 'store')
+        ->middleware('throttle:6,1')   // 6 intentos por minuto (ajústalo si quieres)
+        ->name('claim.store');
 
     Route::get('/voucher/{code}', 'showVoucher')->name('voucher.show');
     Route::get('/voucher/{code}/download', 'downloadVoucher')->name('voucher.download');
@@ -44,7 +51,7 @@ Route::get('/dashboard', fn () => redirect()->route('admin.claims.index'))
 
 /*
 |--------------------------------------------------------------------------
-| Perfil (Breeze) - evita error "Route [profile.edit] not defined"
+| Perfil (Breeze)
 |--------------------------------------------------------------------------
 */
 Route::middleware('auth')->group(function () {
@@ -55,12 +62,37 @@ Route::middleware('auth')->group(function () {
 
 require __DIR__ . '/auth.php';
 
-
-use Illuminate\Support\Facades\Log;
-
 if (app()->environment('local')) {
     Route::get('/__logtest', function () {
         Log::debug('Log test @ '.now());
         return 'ok';
     });
 }
+
+
+use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Schema;
+
+if (app()->environment('local')) {
+    Route::get('/__dbcheck', function () {
+        return response()->json([
+            'env'          => app()->environment(),
+            'connection'   => config('database.default'),
+            'driver'       => DB::connection()->getDriverName(),
+            'database'     => DB::connection()->getDatabaseName(),
+            'claims_table' => Schema::hasTable('claims'),
+            'claims_count' => \App\Models\Claim::count(),
+            'first_claim'  => \App\Models\Claim::select('id','nombre','cedula','telefono','email','benefit')->first(),
+        ]);
+    });
+}
+
+
+
+
+Route::get('/__claims_pragma', function () {
+    return response()->json([
+        'columns' => DB::select('PRAGMA table_info(claims)'),
+        'indexes' => DB::select('PRAGMA index_list(claims)'),
+    ]);
+});

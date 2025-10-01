@@ -4,12 +4,12 @@ namespace App\Http\Requests;
 
 use Illuminate\Foundation\Http\FormRequest;
 use Illuminate\Validation\Rule;
+use Carbon\Carbon;
 
 class StoreClaimRequest extends FormRequest
 {
     public function authorize(): bool { return true; }
 
-    // Normaliza el email para evitar falsos duplicados (espacios/mayúsculas)
     protected function prepareForValidation(): void
     {
         $email = $this->input('email');
@@ -21,19 +21,19 @@ class StoreClaimRequest extends FormRequest
     public function rules(): array
     {
         return [
-            'benefit'        => ['required','in:mega_combo,revision_bateria,cambio_aceite,trabajos_autorizados'],
-            'tentative_date' => ['required','date','after_or_equal:today'],
+            'benefit'          => ['required','in:mega_combo,revision_bateria,cambio_aceite,trabajos_autorizados'],
+            'fecha_tentativa'  => ['required','date','after_or_equal:today'],
+            'hora_tentativa'   => ['required','date_format:H:i'],
 
-            // Un correo = un bono (global)
-            'email' => ['nullable','email','max:150', Rule::unique('claims','email')],
+            // Unicidades globales
+            'email'            => ['required','email','max:150', Rule::unique('claims','email')],
+            'nombre'           => ['required','string','max:100', Rule::unique('claims','nombre')],
+            'cedula'           => ['required','regex:/^\d{6,12}$/', Rule::unique('claims','cedula')],
+            'telefono'         => ['required','regex:/^\d{7,10}$/', Rule::unique('claims','telefono')],
 
-            // Si prefieres "un correo por beneficio", usa esto en vez de la línea anterior:
-            // 'email' => ['nullable','email','max:150',
-            //     Rule::unique('claims','email')->where(fn($q) => $q->where('benefit', $this->input('benefit')))
-            // ],
-
-            'name'  => ['nullable','string','max:120'],
-            'phone' => ['nullable','string','max:30'],
+            'direccion'        => ['required','string','max:160'],
+            'placa'            => ['required','regex:/^[A-Z]{3}\d{3}$/','max:8'],
+            'marca_modelo'     => ['required','string','max:100'],
 
             'referrals'         => ['nullable','array','max:3'],
             'referrals.*.name'  => ['nullable','string','max:120'],
@@ -45,10 +45,62 @@ class StoreClaimRequest extends FormRequest
     public function messages(): array
     {
         return [
-            'email.unique' => 'Este correo ya tiene un bono registrado. Si no encuentras tu bono, contáctanos.',
-            'email.email'  => 'Escribe un correo válido (ej. nombre@dominio.com).',
-            'email.max'    => 'El correo no puede superar 150 caracteres.',
+            'email.unique'    => 'Este correo ya tiene un bono registrado.',
+            'cedula.unique'   => 'Esta cédula ya tiene un bono registrado.',
+            'telefono.unique' => 'Este teléfono ya tiene un bono registrado.',
+            'nombre.unique'   => 'Este nombre ya tiene un bono registrado.',
+
+            'placa.regex'     => 'La placa debe ser como AAA123 (sin guion).',
+            'cedula.regex'    => 'La cédula debe contener entre 6 y 12 dígitos.',
+            'telefono.regex'  => 'El teléfono debe contener entre 7 y 10 dígitos.',
         ];
     }
-}
 
+    /** Reglas de negocio para hora según día de la semana. */
+    public function withValidator($validator): void
+    {
+        $validator->after(function ($v) {
+            // si ya falló lo básico, no seguimos
+            if ($v->errors()->any()) return;
+
+            $date = $this->date('fecha_tentativa');     // Carbon|null
+            $time = (string) $this->input('hora_tentativa');
+
+            if (!$date || !$time) return;
+
+            $dow = $date->dayOfWeek; // 0=Dom, 6=Sab
+            $weekend = ($dow === 0 || $dow === 6);
+
+            $allowed = $this->generateSlots('06:30', $weekend ? '10:30' : '14:00', 30);
+            if ($weekend) {
+                // excepción explícita solicitada
+                if (!in_array('10:40', $allowed, true)) {
+                    $allowed[] = '10:40';
+                }
+            }
+
+            if (!in_array($time, $allowed, true)) {
+                $msg = $weekend
+                    ? 'La hora debe estar entre 6:30 y 10:40 (fines de semana) en intervalos de 30 minutos.'
+                    : 'La hora debe estar entre 6:30 y 14:00 en intervalos de 30 minutos.';
+                $v->errors()->add('hora_tentativa', $msg);
+            }
+        });
+    }
+
+    /** Devuelve array de strings "HH:MM" cada $stepMin minutos entre $start y $end (incluidos). */
+    private function generateSlots(string $start, string $end, int $stepMin): array
+    {
+        [$sH,$sM] = array_map('intval', explode(':', $start));
+        [$eH,$eM] = array_map('intval', explode(':', $end));
+        $cur = Carbon::createFromTime($sH,$sM,0);
+        $last= Carbon::createFromTime($eH,$eM,0);
+
+        $slots = [];
+        while ($cur->lte($last)) {
+            $slots[] = $cur->format('H:i');
+            $cur->addMinutes($stepMin);
+        }
+        return $slots;
+    }
+}
