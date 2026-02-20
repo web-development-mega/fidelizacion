@@ -151,7 +151,7 @@
         </div>
         <div class="text-lg sm:text-xl font-bold leading-tight">
           <span class="text-emerald-600">Selecciona</span> para reclamar
-          <span class="text-emerald-700">tu beneficio</span>
+          <span class="text-emerald-700">tu beneficio.</span>
         </div>
       </div>
     </footer>
